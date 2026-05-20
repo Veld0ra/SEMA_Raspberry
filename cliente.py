@@ -1,36 +1,16 @@
 #!/usr/bin/env python
 
+import asyncio
+import websockets
+import json
 import requests
 import sys
-import time
-import os
 from datetime import datetime
 
-URL = "http://100.124.128.57:8001"
+SERVER_URL = "http://100.124.128.57:8001"
+API_KEY = "SUA_API_KEY"
 
-
-# =========================
-# VOZ (ESTÁVEL)
-# =========================
-def falar(texto):
-    try:
-        texto = str(texto)
-
-        # limpeza forte (evita crash do espeak)
-        texto = texto.replace('"', '')
-        texto = texto.replace("'", '')
-        texto = texto.replace("\n", " ")
-        texto = texto.strip()
-
-        if not texto:
-            return
-
-        os.system(
-            f'espeak-ng -v pt-br -s 165 -a 200 "{texto}"'
-        )
-
-    except Exception as e:
-        print("[ERRO VOZ]", e)
+WS_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview"
 
 
 # =========================
@@ -47,110 +27,97 @@ def boot():
 # =========================
 # SAUDAÇÃO LOCAL
 # =========================
-def saudacao_local():
+def saudacao():
     agora = datetime.now()
 
-    hora = agora.hour
-    data = agora.strftime("%d/%m/%Y")
-    horario = agora.strftime("%H:%M")
-
-    if hora < 12:
-        periodo = "Bom dia"
-    elif hora < 18:
-        periodo = "Boa tarde"
-    else:
-        periodo = "Boa noite"
-
-    return (
-        f"{periodo}, hoje é dia {data} "
-        f"e são {horario}. "
-        f"No que posso ajudar hoje?"
-    )
+    if agora.hour < 12:
+        return "Bom dia"
+    elif agora.hour < 18:
+        return "Boa tarde"
+    return "Boa noite"
 
 
 # =========================
-# CONEXÃO COM SERVIDOR
+# BUSCA CONTEXTO NO SERVIDOR
 # =========================
-def conectar_servidor():
-    while True:
-        try:
-            print("[•] Conectando ao servidor...")
-
-            r = requests.post(
-                URL,
-                json={"msg": "__ping__"},
-                timeout=5
-            )
-
-            if r.status_code != 200:
-                raise Exception()
-
-            print("    └── conexão estabelecida\n")
-
-            print("══════════════════════════════")
-            print("STATUS :: ONLINE\n")
-
-            msg = saudacao_local()
-
-            print("Sema:")
-            print(msg)
-            print()
-
-            falar(msg)
-
-            return True
-
-        except requests.exceptions.ConnectionError:
-            print("    └── servidor indisponível\n")
-
-        except requests.exceptions.Timeout:
-            print("    └── tempo de conexão excedido\n")
-
-        except Exception:
-            print("    └── erro inesperado\n")
-
-        print("Tentando novamente em 3 segundos...\n")
-        time.sleep(3)
-
-        if input("Deseja continuar tentando? (Y/n): ").lower() == "n":
-            print("Encerrando Sema...\n")
-            sys.exit()
+def get_contexto(msg):
+    r = requests.post(SERVER_URL, json={"msg": msg}, timeout=10)
+    return r.json().get("contexto", "")
 
 
 # =========================
-# INÍCIO
+# REALTIME
 # =========================
+async def run():
+
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "OpenAI-Beta": "realtime=v1"
+    }
+
+    async with websockets.connect(WS_URL, extra_headers=headers) as ws:
+
+        await ws.send(json.dumps({
+            "type": "session.update",
+            "session": {
+                "modalities": ["text"],
+                "instructions": "Você é Sema, assistente pessoal inteligente e amigável."
+            }
+        }))
+
+        print("Sema:", saudacao())
+
+        while True:
+
+            msg = input("Você: ")
+
+            if msg.lower() == "sair":
+                sys.exit()
+
+            # pega memória do servidor
+            contexto = get_contexto(msg)
+
+            await ws.send(json.dumps({
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{
+                        "type": "input_text",
+                        "text": contexto
+                    }]
+                }
+            }))
+
+            await ws.send(json.dumps({
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": msg
+                    }]
+                }
+            }))
+
+            await ws.send(json.dumps({
+                "type": "response.create"
+            }))
+
+            resposta = ""
+
+            while True:
+                data = json.loads(await ws.recv())
+
+                if data.get("type") == "response.output_text.delta":
+                    print(data.get("delta", ""), end="", flush=True)
+                    resposta += data.get("delta", "")
+
+                if data.get("type") == "response.done":
+                    print("\n")
+                    break
+
+
 boot()
-conectar_servidor()
-
-
-# =========================
-# LOOP PRINCIPAL
-# =========================
-while True:
-
-    msg = input("Você: ")
-
-    if msg.lower() == "sair":
-        print("\nEncerrando Sema...\n")
-        sys.exit()
-
-    try:
-        r = requests.post(URL, json={"msg": msg}, timeout=30)
-        r.raise_for_status()
-
-        texto = r.json().get("resposta", "")
-
-        print(f"\nSema:\n{texto}\n")
-
-        falar(texto)
-
-    except requests.exceptions.ConnectionError:
-        print("\n⚠ Conexão perdida.\n")
-        conectar_servidor()
-
-    except requests.exceptions.Timeout:
-        print("\n⚠ Tempo excedido.\n")
-
-    except Exception as e:
-        print(f"\n⚠ Erro inesperado:\n{e}\n")
+asyncio.run(run())
