@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+ #!/usr/bin/env python
 
 import requests
 import sys
@@ -11,22 +11,35 @@ URL = "http://100.124.128.57:8001"
 
 
 # =========================
-# VOZ (CORRIGIDO)
+# VOZ (ROBUSTA)
 # =========================
 def falar(texto):
-    texto = str(texto)
+    try:
+        texto = str(texto)
 
-    # remove coisas que quebram o espeak
-    texto = texto.replace('"', '')
-    texto = texto.replace("'", '')
-    texto = texto.replace("\n", " ")
+        # limpeza mais forte
+        texto = texto.replace('"', '')
+        texto = texto.replace("'", '')
+        texto = texto.replace("\n", " ")
+        texto = texto.strip()
 
-    subprocess.run([
-        "espeak-ng",
-        "-v", "pt-br",
-        "-s", "165",
-        texto
-    ])
+        if not texto:
+            return
+
+        subprocess.run(
+            [
+                "espeak-ng",
+                "-v", "pt-br",
+                "-s", "165",
+                texto
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False
+        )
+
+    except Exception as e:
+        print(f"[VOZ ERRO] {e}")
 
 
 # =========================
@@ -83,18 +96,6 @@ def conectar_servidor():
 
             print("    └── conexão estabelecida\n")
 
-            print("[•] Carregando memória...")
-            time.sleep(1)
-            print("    └── memória ativa\n")
-
-            print("[•] Inicializando módulos...")
-            time.sleep(1)
-            print("    └── sistemas carregados\n")
-
-            print("[•] Sincronizando contexto...")
-            time.sleep(1)
-            print("    └── histórico restaurado\n")
-
             print("══════════════════════════════")
             print("STATUS :: ONLINE\n")
 
@@ -147,8 +148,7 @@ while True:
         r = requests.post(URL, json={"msg": msg}, timeout=30)
         r.raise_for_status()
 
-        resposta = r.json()
-        texto = resposta['resposta']
+        texto = r.json().get("resposta", "")
 
         print(f"\nSema:\n{texto}\n")
 
