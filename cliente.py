@@ -1,16 +1,19 @@
 #!/usr/bin/env python
 
-import asyncio
-import websockets
-import json
-import requests
 import sys
+import asyncio
+import json
+import base64
+import websockets
+import sounddevice as sd
+import numpy as np
 from datetime import datetime
 
-SERVER_URL = "http://100.124.128.57:8001"
-API_KEY = "SUA_API_KEY"
-
-WS_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview"
+# =========================
+# CONFIG REALTIME
+# =========================
+API_KEY = "SUA_API_KEY_AQUI"
+URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview"
 
 
 # =========================
@@ -25,99 +28,126 @@ def boot():
 
 
 # =========================
-# SAUDAÇÃO LOCAL
+# SAUDAÇÃO
 # =========================
-def saudacao():
+def saudacao_local():
     agora = datetime.now()
 
     if agora.hour < 12:
-        return "Bom dia"
+        periodo = "Bom dia"
     elif agora.hour < 18:
-        return "Boa tarde"
-    return "Boa noite"
+        periodo = "Boa tarde"
+    else:
+        periodo = "Boa noite"
+
+    return (
+        f"{periodo}, hoje é dia {agora.strftime('%d/%m/%Y')} "
+        f"e são {agora.strftime('%H:%M')}. "
+        f"No que posso ajudar hoje?"
+    )
 
 
 # =========================
-# BUSCA CONTEXTO NO SERVIDOR
+# TOCAR ÁUDIO (REALTIME)
 # =========================
-def get_contexto(msg):
-    r = requests.post(SERVER_URL, json={"msg": msg}, timeout=10)
-    return r.json().get("contexto", "")
+def tocar_audio(base64_audio):
+    audio_bytes = base64.b64decode(base64_audio)
+
+    audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
+
+    sd.play(audio_array, samplerate=24000)
+    sd.wait()
 
 
 # =========================
-# REALTIME
+# REALTIME CLIENT
 # =========================
-async def run():
+async def realtime():
 
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "OpenAI-Beta": "realtime=v1"
     }
 
-    async with websockets.connect(WS_URL, extra_headers=headers) as ws:
+    async with websockets.connect(
+        URL,
+        additional_headers=headers,
+        ping_interval=20,
+        ping_timeout=20
+    ) as ws:
 
+        # sessão com VOZ ATIVADA
         await ws.send(json.dumps({
             "type": "session.update",
             "session": {
-                "modalities": ["text"],
-                "instructions": "Você é Sema, assistente pessoal inteligente e amigável."
+                "modalities": ["text", "audio"],  # 🔥 AQUI ESTÁ A MÁGICA
+                "voice": "alloy",  # voz humana da OpenAI
+                "instructions": "Você é a SEMA, uma assistente inteligente, amigável e direta."
             }
         }))
 
-        print("Sema:", saudacao())
+        print("Sema:")
+        print(saudacao_local())
+        print()
+
+        # fala saudação (texto ainda opcional)
+        print("(voz será gerada pela API)")
 
         while True:
 
             msg = input("Você: ")
 
             if msg.lower() == "sair":
+                print("\nEncerrando Sema...\n")
                 sys.exit()
 
-            # pega memória do servidor
-            contexto = get_contexto(msg)
+            try:
+                # envia mensagem
+                await ws.send(json.dumps({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": msg
+                        }]
+                    }
+                }))
 
-            await ws.send(json.dumps({
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "message",
-                    "role": "system",
-                    "content": [{
-                        "type": "input_text",
-                        "text": contexto
-                    }]
-                }
-            }))
+                # pede resposta
+                await ws.send(json.dumps({
+                    "type": "response.create"
+                }))
 
-            await ws.send(json.dumps({
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "message",
-                    "role": "user",
-                    "content": [{
-                        "type": "input_text",
-                        "text": msg
-                    }]
-                }
-            }))
+                resposta_texto = ""
 
-            await ws.send(json.dumps({
-                "type": "response.create"
-            }))
+                # recebe streaming (texto + áudio)
+                while True:
+                    data = json.loads(await ws.recv())
+                    tipo = data.get("type")
 
-            resposta = ""
+                    # texto opcional (debug)
+                    if tipo == "response.output_text.delta":
+                        resposta_texto += data.get("delta", "")
+                        print(data.get("delta", ""), end="", flush=True)
 
-            while True:
-                data = json.loads(await ws.recv())
+                    # áudio vindo da OpenAI
+                    elif tipo == "response.audio.delta":
+                        audio = data.get("delta")
+                        tocar_audio(audio)
 
-                if data.get("type") == "response.output_text.delta":
-                    print(data.get("delta", ""), end="", flush=True)
-                    resposta += data.get("delta", "")
+                    elif tipo == "response.done":
+                        print("\n")
+                        break
 
-                if data.get("type") == "response.done":
-                    print("\n")
-                    break
+            except Exception as e:
+                print(f"\n⚠ Erro Realtime Audio:\n{e}\n")
+                break
 
 
+# =========================
+# INÍCIO
+# =========================
 boot()
-asyncio.run(run())
+asyncio.run(realtime())
