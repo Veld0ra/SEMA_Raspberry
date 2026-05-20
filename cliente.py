@@ -1,23 +1,22 @@
- #!/usr/bin/env python
+#!/usr/bin/env python
 
 import requests
 import sys
 import time
 import os
-import subprocess
 from datetime import datetime
 
 URL = "http://100.124.128.57:8001"
 
 
 # =========================
-# VOZ (ROBUSTA)
+# VOZ (ESTÁVEL)
 # =========================
 def falar(texto):
     try:
         texto = str(texto)
 
-        # limpeza mais forte
+        # limpeza forte (evita crash do espeak)
         texto = texto.replace('"', '')
         texto = texto.replace("'", '')
         texto = texto.replace("\n", " ")
@@ -26,20 +25,12 @@ def falar(texto):
         if not texto:
             return
 
-        subprocess.run(
-            [
-                "espeak-ng",
-                "-v", "pt-br",
-                "-s", "165",
-                texto
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False
+        os.system(
+            f'espeak-ng -v pt-br -s 165 -a 200 "{texto}"'
         )
 
     except Exception as e:
-        print(f"[VOZ ERRO] {e}")
+        print("[ERRO VOZ]", e)
 
 
 # =========================
